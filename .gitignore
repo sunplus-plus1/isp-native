@@ -1,0 +1,8 @@
+*~
+*.bak
+
+# toolchains have prebuilt .o
+#*.o
+
+tools/isp/isp
+tools/isp/isp.o

@@ -1,0 +1,11 @@
+CPU_NUM		= $(shell grep -c processor /proc/cpuinfo)
+JOB_LIMIT	= $(shell echo "${CPU_NUM} * 5 / 4" | bc)
+LOAD_LIMIT	= $(CPU_NUM)
+MAKE_JOBS	= -j $(JOB_LIMIT) -l $(LOAD_LIMIT)
+MAKE = make
+ECHO = echo -e
+CP = cp
+MKDIR = mkdir
+RM = rm
+LN = ln
+

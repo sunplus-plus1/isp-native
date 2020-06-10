@@ -6,7 +6,6 @@ RESIZE_FLAG=/etc/init.d/resizeflag
 fdisk_func()
 {
 	echo "p
-	u
 	d
 	2
 	n
@@ -24,7 +23,7 @@ extend_rootpartiton()
 	echo "totalsize=$totalsize"
 	
 	totalsize=$(awk -v x=$totalsize -v y=512 -v z=8 'BEGIN{printf "%d\n",(x/y)-z}')
-	rootpartstartsector=$(fdisk -lu $DEV_BLK | grep "$RESIZE_PART"|awk '{print $2}'|tr -cd "[0-9]")
+	rootpartstartsector=$(fdisk -lu $DEV_BLK | grep "$RESIZE_PART"|awk '{print $4}'|tr -cd "[0-9]")
 	echo "totalsize=$totalsize startsector=$rootpartstartsector"
 	
 	fdisk_func $rootpartstartsector $totalsize

@@ -3,6 +3,7 @@ JOB_LIMIT	= $(shell echo "${CPU_NUM} * 5 / 4" | bc)
 LOAD_LIMIT	= $(CPU_NUM)
 MAKE_JOBS	= -j $(JOB_LIMIT) -l $(LOAD_LIMIT)
 MAKE = make
+MAKE_ARCH	= $(MAKE) ARCH=$(ARCH)
 ECHO = echo -e
 CP = cp
 MKDIR = mkdir

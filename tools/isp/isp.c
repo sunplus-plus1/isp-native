@@ -118,6 +118,8 @@
 #define MAX_MEM_SIZE_FOR_ISP                        (2 << 20)       // Must be N*(block size), where N=1, 2, ...
 #define GPT_HEADER_SIZE                             (17 << 10)      // GUID Partition header size: (512-byte MBR) + (512-byte header) + (128 bytes * 128 partitions)
 
+#define NAND_UBI_VID_HEAD_OFFSET					2048
+
 typedef unsigned char u08;
 typedef uint32_t      u32;
 const u08 file_header_signature[] = "Pentagram_ISP_image";
@@ -422,7 +424,7 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 #else
 		snprintf(cmd, sizeof(cmd), "mtdparts add nand0 ${isp_mtdpart_size}@0x00000000 nand_header && printenv mtdparts");
 #endif
-		fprintf(fd, "echo %s\n", cmd);
+		fprintf(fd, "echo \"%s\"\n", cmd);
 		fprintf(fd, "%s\n\n", cmd);
 	} else if (nand_or_emmc == IDX_EMMC) {
 		fprintf(fd, "echo Initialize eMMC ...\n");
@@ -559,7 +561,7 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 					snprintf(cmd, sizeof(cmd), "mtdparts add nand0 ${isp_mtdpart_size}@${isp_nand_addr} %s && printenv mtdparts", basename( isp_info.file_header.partition_info[i].file_name));
 #endif
 
-					fprintf(fd, "echo %s\n", cmd);
+					fprintf(fd, "echo \"%s\"\n", cmd);
 					fprintf(fd, "%s\n\n", cmd);
 				} else {
 					// Should keep some space after argv[ARGC_PACK_IMAGE_UBOOT2_FILE],
@@ -579,7 +581,7 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 					snprintf(cmd, sizeof(cmd), "mtdparts add nand0 ${isp_mtdpart_size}@${isp_nand_addr} %s && printenv mtdparts", basename( isp_info.file_header.partition_info[i].file_name));
 #endif
 
-					fprintf(fd, "echo %s\n", cmd);
+					fprintf(fd, "echo \"%s\"\n", cmd);
 					fprintf(fd, "%s\n\n", cmd);
 
 					fprintf(fd, "printenv isp_nand_addr_1st_part\n\n");
@@ -602,39 +604,16 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 					isp_info.file_header.partition_info[i].file_size);
 #endif /* PARTITION_SIZE_BAD_BLOCK_DOES_NOT_COUNT */
 
-				file_size = isp_info.file_header.partition_info[i].file_size;
-				flag_first = 1;     // first MAX_MEM_SIZE_FOR_ISP bytes of the programmed file.
-				size_programmed = 0;
-				while (file_size) {
-					size = (file_size > MAX_MEM_SIZE_FOR_ISP) ? MAX_MEM_SIZE_FOR_ISP : file_size;
-					fprintf(fd, "fatload $isp_if $isp_dev $isp_ram_addr /%s 0x%x 0x%x\n", basename( isp_info.file_name_pack_image), size,
-						(size_programmed + (isp_info.file_header.partition_info[i].file_offset)));
-
-#if !defined(REDUCE_MESSAGE)
-					fprintf(fd, "md.b $isp_ram_addr 0x0100\n");
-#endif
-
-					// "nand erase.chip" already,
-					// fprintf(fd, "nand erase $isp_nand_addr 0x%x\n", isp_info.file_header.partition_info[i].file_size);
-					// fprintf(fd, "setexpr isp_addr_nand_write_next $isp_nand_addr + 0x%x && setenv isp_addr_nand_write_next 0x${isp_addr_nand_write_next}\n",size_programmed);
-					fprintf(fd, "echo isp_addr_nand_write_next: ${isp_addr_nand_write_next}\n");
-
-					if (flag_first) {
-						flag_first = 0;
-						snprintf(cmd, sizeof(cmd), "nand write $isp_ram_addr $isp_nand_addr 0x%x", size);
-					} else
-						snprintf(cmd, sizeof(cmd), "nand write $isp_ram_addr $isp_addr_nand_write_next 0x%x",
-							 size);    // isp_addr_nand_write_next is set in nand_write() (uboot/drivers/mtd/nand/nand_base.c)
-
-					fprintf(fd, "echo %s\n", cmd);
-					fprintf(fd, "%s\n", cmd);
-					// fprintf(fd, "ispsp progress 0x%x 0x00\n", size);
-					size_programmed += size;
-					file_size       -= size;
-				}
-
+				// set partition fisrt for ubifs. ubi write data base on the partition info.
 #if !defined(PARTITION_SIZE_BAD_BLOCK_DOES_NOT_COUNT)
-				fprintf(fd, "setenv isp_mtdpart_size 0x%x\n", isp_info.file_header.partition_info[i].partition_size);
+				if(strcmp(isp_info.file_header.partition_info[i].file_name,"rootfs")==0)
+				{
+					fprintf(fd, "setenv isp_mtdpart_size -\n"); //set rootfs part size to remaining space
+				}
+				else
+				{
+					fprintf(fd, "setenv isp_mtdpart_size 0x%x\n", isp_info.file_header.partition_info[i].partition_size);
+				}
 				snprintf(cmd, sizeof(cmd), "mtdparts add nand0 ${isp_mtdpart_size}@${isp_nand_addr} %s", basename( isp_info.file_header.partition_info[i].file_name));
 #else /* defined(PARTITION_SIZE_BAD_BLOCK_DOES_NOT_COUNT) */
 				fprintf(fd, "setenv isp_mtdpart_size 0x${isp_find_area_new_size}\n");
@@ -654,6 +633,57 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 				fprintf(fd, "else\n");
 				fprintf(fd, "    exit -1\n");
 				fprintf(fd, "fi\n\n");
+
+				file_size = isp_info.file_header.partition_info[i].file_size;
+				flag_first = 1;     // first MAX_MEM_SIZE_FOR_ISP bytes of the programmed file.
+				size_programmed = 0;
+
+				while (file_size) {
+					size = (file_size > MAX_MEM_SIZE_FOR_ISP) ? MAX_MEM_SIZE_FOR_ISP : file_size;
+					fprintf(fd, "fatload $isp_if $isp_dev $isp_ram_addr /%s 0x%x 0x%x\n", basename( isp_info.file_name_pack_image), size,
+						(size_programmed + (isp_info.file_header.partition_info[i].file_offset)));
+
+#if !defined(REDUCE_MESSAGE)
+					fprintf(fd, "md.b $isp_ram_addr 0x0100\n");
+#endif
+
+					// "nand erase.chip" already,
+					// fprintf(fd, "nand erase $isp_nand_addr 0x%x\n", isp_info.file_header.partition_info[i].file_size);
+					// fprintf(fd, "setexpr isp_addr_nand_write_next $isp_nand_addr + 0x%x && setenv isp_addr_nand_write_next 0x${isp_addr_nand_write_next}\n",size_programmed);
+					fprintf(fd, "echo isp_addr_nand_write_next: ${isp_addr_nand_write_next}\n");
+
+					if (flag_first) {
+						flag_first = 0;
+						if(strcmp(isp_info.file_header.partition_info[i].file_name,"rootfs")==0)
+						{
+							fprintf(fd, "ubi part rootfs %d\n",NAND_UBI_VID_HEAD_OFFSET);
+							fprintf(fd, "ubi create rootfs - \n");
+							snprintf(cmd, sizeof(cmd), "ubi write.part $isp_ram_addr %s 0x%x 0x%x",isp_info.file_header.partition_info[i].file_name, size,file_size);
+						}
+						else
+						{
+							snprintf(cmd, sizeof(cmd), "nand write $isp_ram_addr $isp_nand_addr 0x%x", size);
+						}
+
+					}
+					else
+					{
+						if(strcmp(isp_info.file_header.partition_info[i].file_name,"rootfs")==0)
+						{
+							snprintf(cmd, sizeof(cmd), "ubi write.part $isp_ram_addr %s 0x%x",isp_info.file_header.partition_info[i].file_name, size);
+						}
+						else
+						{
+							snprintf(cmd, sizeof(cmd), "nand write $isp_ram_addr $isp_addr_nand_write_next 0x%x",
+								 size);    // isp_addr_nand_write_next is set in nand_write() (uboot/drivers/mtd/nand/nand_base.c)
+						}
+					}
+					fprintf(fd, "echo %s\n", cmd);
+					fprintf(fd, "%s\n", cmd);
+					// fprintf(fd, "ispsp progress 0x%x 0x00\n", size);
+					size_programmed += size;
+					file_size       -= size;
+				 }
 			} else if (nand_or_emmc == IDX_EMMC) {
 				file_size = isp_info.file_header.partition_info[i].file_size;
 				size_programmed = 0;
@@ -687,9 +717,10 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 	}
 	if ((isp_info.file_header.flags & FLAGS_MTD_ONLY) && (nand_or_emmc == IDX_NAND)) {
 #if !defined(REDUCE_MESSAGE)
-		fprintf(fd, "mtdparts add nand0 - userdata && mtdparts && printenv mtdparts\n\n");      // Assign unused area to "userdata"
+		//for nand and emmc ,the rootfs is the last partition,no overlay and userdata partition
+		//fprintf(fd, "mtdparts add nand0 - userdata && mtdparts && printenv mtdparts\n\n");      // Assign unused area to "userdata"
 #else
-		fprintf(fd, "mtdparts add nand0 - userdata && printenv mtdparts\n\n");                  // Assign unused area to "userdata"
+		//fprintf(fd, "mtdparts add nand0 - userdata && printenv mtdparts\n\n");                  // Assign unused area to "userdata"
 #endif
 	}
 
@@ -710,6 +741,11 @@ int gen_script_main(char *file_name_isp_script, int nand_or_emmc)
 	for (i = 0; i < NUM_OF_PARTITION; i++) {
 		if (isp_info.file_header.partition_info[i].partition_size == 0)
 			continue;
+		if(nand_or_emmc == IDX_NAND && strcmp(isp_info.file_header.partition_info[i].file_name,"rootfs")==0)
+		{
+			// nand of ubifs, no read cmd to read part of imgdata ,for ubifs nand ,not do verify.
+			continue;
+		}
 
 		file_size = isp_info.file_header.partition_info[i].file_size;
 		flag_first = 1;     // first MAX_MEM_SIZE_FOR_ISP bytes of the verified file.
@@ -986,10 +1022,11 @@ int pack_image(int argc, char **argv)
 
 	for (i = 0; i < idx_partition_info; i++) {
 #ifdef XBOOT1_IN_EMMC_BOOTPART
-		if (i <= IDX_PARTITION_UBOOT1) {
+		if (i <= IDX_PARTITION_UBOOT1)
 #else
-		if (i <= IDX_PARTITION_XBOOT1) {
+		if (i <= IDX_PARTITION_XBOOT1)
 #endif
+		{
 			isp_info.file_header.partition_info[i].emmc_partition_start = BYTE2BLOCK(GPT_HEADER_SIZE);
 		} else {
 			isp_info.file_header.partition_info[i].emmc_partition_start =
@@ -1537,8 +1574,6 @@ int extract4update(int argc, char **argv, int extract4update_src)
 
 #if !defined(REDUCE_MESSAGE)
 	fprintf(fd2, "md.b $isp_ram_addr 0x0200 && source $isp_ram_addr\n");
-#else
-	fprintf(fd2, "md.b $isp_ram_addr 0x0080 && source $isp_ram_addr\n");
 #endif
 
 	fclose(fd2);
@@ -1669,21 +1704,33 @@ int extract4update(int argc, char **argv, int extract4update_src)
 }
 
 #define EXTRACT4BOOT2LINUX_FOR_SDCARD	(0)
-#define EXTRACT4BOOT2LINUX_FOR_OTHER	(1)
+#define EXTRACT4BOOT2LINUX_FOR_USB	(1)
+#define EXTRACT4BOOT2LINUX_FOR_OTHER	(2)
 
 int extract4boot2linux(int argc, char **argv,int extrac4boot2linux_src)
 {
 	FILE *fd, *fd2;
 	struct file_header_s file_header_extract4boot2linux;
-	const char *partition_to_be_loaded[] = {"kernel", "dtb", "rootfs", NULL};
+	const char *partition_to_be_loaded[] = {"kernel", "dtb","nonos", NULL};
 	int i, idx;
 	const char *char_ptr;
+	char bSD_not_load;
 	int num_need_cp;
 	u32 offset_of_last_file;
 	char tmp_file[32], cmd[1024];
 	char tmp_file_init_script[32];
 	struct stat file_stat;
 	char tmp_file_file_header[32];
+
+	if(extrac4boot2linux_src == EXTRACT4BOOT2LINUX_FOR_SDCARD){
+		//for sdcard boot,ISPBOOOT.BIN contains only xboot.img.
+		//sdcard executes ISP or boot, which is determined by judging the size of ISPBOOOT.BIN in xboot and uboot
+		sprintf(cmd, "dd if=%s of=%s bs=1024 skip=0 count=%u %s",
+			argv[ARGC_EXTRACT4BOOT2LINUX_INPUT], argv[ARGC_EXTRACT4BOOT2LINUX_OUTPUT],(FILE_SIZE_IMAGE_XBOOT0 >> 10), MESSAGE_OUT);
+		system(cmd);
+		return 0;
+	}
+
 
 	fd = fopen(argv[ARGC_EXTRACT4BOOT2LINUX_INPUT], "rb");
 	if (fd == NULL) {
@@ -1702,12 +1749,10 @@ int extract4boot2linux(int argc, char **argv,int extrac4boot2linux_src)
 	}
 
 	fclose(fd);
-
 	if (memcmp(isp_info.file_header.signature, file_header_signature, sizeof(file_header_signature)) != 0) {
 		printf("Error: %s doesn't have correct signature.\n", argv[ARGC_EXTRACT4BOOT2LINUX_INPUT]);
 		exit(-1);
 	}
-
 	offset_of_last_file = FILE_SIZE_IMAGE_XBOOT0 + FILE_SIZE_IMAGE_UBOOT0 + sizeof(file_header_extract4boot2linux);
 	memset(&file_header_extract4boot2linux, 0x00, sizeof(file_header_extract4boot2linux));
 	strncpy(file_header_extract4boot2linux.signature, file_header_signature, sizeof(file_header_extract4boot2linux.signature));
@@ -1718,23 +1763,14 @@ int extract4boot2linux(int argc, char **argv,int extrac4boot2linux_src)
 		if (char_ptr == NULL) {
 			break;
 		}
-		if(extrac4boot2linux_src == EXTRACT4BOOT2LINUX_FOR_SDCARD && (strcmp(char_ptr, "rootfs") == 0)){
-			num_need_cp++;
-			continue; // sdcard boot no need to loader rootfs
-		}		
-		
-		// printf("%s, %d, %s\n", __FILE__, __LINE__, partition_to_be_loaded[num_need_cp]);
-
 		idx = get_partition_info_idx_by_file_name(partition_to_be_loaded[num_need_cp]);
 		if (idx < 0) {
 			printf("Warning: %s isn't a valid partition.\n", partition_to_be_loaded[num_need_cp]);
 			break;
 		}
-
 		memcpy(&file_header_extract4boot2linux.partition_info[num_need_cp], &isp_info.file_header.partition_info[idx], sizeof(struct partition_info_s));
 		file_header_extract4boot2linux.partition_info[num_need_cp].file_offset = offset_of_last_file;
 		offset_of_last_file += file_header_extract4boot2linux.partition_info[num_need_cp].file_size;
-
 		num_need_cp++;
 	}
 
@@ -1752,67 +1788,40 @@ int extract4boot2linux(int argc, char **argv,int extrac4boot2linux_src)
 	fprintf(fd2, "    setenv isp_ram_addr 0x%x\n", ADDRESS_FATLOAD);
 	fprintf(fd2, "    $isp_if start\n");
 	fprintf(fd2, "fi\n\n");
-	fprintf(fd2, "fatinfo $isp_if $isp_dev\n");
-	fprintf(fd2, "fatls   $isp_if $isp_dev /\n\n");
+	//fprintf(fd2, "fatinfo $isp_if $isp_dev\n");
+	//fprintf(fd2, "fatls   $isp_if $isp_dev /\n\n");
 
-	for (i == 0; i < NUM_OF_PARTITION; i++) {
+	for (i = 0; i < NUM_OF_PARTITION; i++) {
 		if (file_header_extract4boot2linux.partition_info[i].file_size == 0) {
 			break;
 		}
-
 		fprintf(fd2, "echo Loading %s to $addr_dst_%s\n", partition_to_be_loaded[i], partition_to_be_loaded[i]);
-		if(extrac4boot2linux_src == EXTRACT4BOOT2LINUX_FOR_SDCARD && strcmp(file_header_extract4boot2linux.partition_info[i].file_name,"kernel")==0)
-		{
-			
-			fprintf(fd2, "fatsize $isp_if $isp_dev /uImage \n\n");
-			fprintf(fd2, "fatload $isp_if $isp_dev $addr_dst_%s /uImage $filesize 0\n\n",partition_to_be_loaded[i]);
-		}
-		else if(extrac4boot2linux_src == EXTRACT4BOOT2LINUX_FOR_SDCARD && strcmp(file_header_extract4boot2linux.partition_info[i].file_name,"dtb")==0)
-		{
-			fprintf(fd2, "fatsize $isp_if $isp_dev /dtb \n\n");
-			fprintf(fd2, "fatload $isp_if $isp_dev $addr_dst_%s /dtb $filesize 0\n\n",partition_to_be_loaded[i]);
-		}
-		else
-		{
 		fprintf(fd2, "fatload $isp_if $isp_dev $addr_dst_%s /ISPBOOOT.BIN 0x%x 0x%x\n\n",
 			partition_to_be_loaded[i],
 			file_header_extract4boot2linux.partition_info[i].file_size,
 			file_header_extract4boot2linux.partition_info[i].file_offset);
-		}
 	}
 
 	for (i = 0; i < NUM_OF_PARTITION; i++) {
 		if (file_header_extract4boot2linux.partition_info[i].file_size == 0) {
 			break;
 		}
-		if(extrac4boot2linux_src == EXTRACT4BOOT2LINUX_FOR_SDCARD && (strcmp(file_header_extract4boot2linux.partition_info[i].file_name,"kernel")==0 ||\
-			strcmp(file_header_extract4boot2linux.partition_info[i].file_name,"dtb")==0))
-		{
-			fprintf(fd2,"echo sdcard %s no need do md5 check!!!\n",file_header_extract4boot2linux.partition_info[i].file_name);
-			continue;
-		}
+
 		fprintf(fd2, "echo verifying %s\n", partition_to_be_loaded[i]);
-		fprintf(fd2, "md5sum $addr_dst_%s 0x%x md5sum_value\n",
-			partition_to_be_loaded[i],
+		fprintf(fd2, "md5sum $addr_dst_%s 0x%x md5sum_value\n",	partition_to_be_loaded[i],
 			file_header_extract4boot2linux.partition_info[i].file_size);
 		fprintf(fd2, "if test \"$md5sum_value\" = %s ; then\n", file_header_extract4boot2linux.partition_info[i].md5sum);
 		fprintf(fd2, "    echo md5sum: OK.\n");
+		if (strcmp(file_header_extract4boot2linux.partition_info[i].file_name, "nonos") == 0) {
+			fprintf(fd2, "    echo \"## Booting A926 from image at ${addr_dst_nonos}\"\n");
+			fprintf(fd2, "    sp_nonos_go ${addr_dst_nonos}\n");
+		}
 		fprintf(fd2, "else\n");
 		fprintf(fd2, "    echo md5sum: Error!\n");
 		fprintf(fd2, "    exit -1\n");
 		fprintf(fd2, "fi\n\n");
 	}
-
-	if (file_header_extract4boot2linux.partition_info[2].file_size == 0) {
-		fprintf(fd2, "bootm ${addr_dst_%s} - ${addr_dst_%s}\n",
-			partition_to_be_loaded[0],
-			partition_to_be_loaded[1]);
-	} else {
-		fprintf(fd2, "bootm ${addr_dst_%s} ${addr_dst_%s}  ${addr_dst_%s}\n",
-			partition_to_be_loaded[0],
-			partition_to_be_loaded[2],
-			partition_to_be_loaded[1]);
-	}
+	fprintf(fd2, "bootm ${addr_dst_%s} - ${fdtcontroladdr}\n", partition_to_be_loaded[0]);
 
 	fclose(fd2);
 
@@ -1935,6 +1944,8 @@ int main(int argc, char **argv)
 		return pack_image(argc, argv);
 	} else if (strcmp(sub_cmd, "extract4boot2linux_sdcardboot") == 0) {
 		return extract4boot2linux(argc, argv,EXTRACT4BOOT2LINUX_FOR_SDCARD);
+	} else if (strcmp(sub_cmd, "extract4boot2linux_usbboot") == 0) {
+		return extract4boot2linux(argc, argv,EXTRACT4BOOT2LINUX_FOR_USB);
 	} else if (strcmp(sub_cmd, "extract4boot2linux") == 0) {
 		return extract4boot2linux(argc, argv,EXTRACT4BOOT2LINUX_FOR_OTHER);
 	} else if (strcmp(sub_cmd, "extract4update") == 0) {

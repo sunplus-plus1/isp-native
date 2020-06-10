@@ -1,0 +1,23 @@
+#
+## uEnv.txt
+#
+NONOS_IMG=a926.img
+KERNEL_IMG=uImage
+DTB=dtb
+sRpi_args=setenv filesize 0; fatsize $isp_if $isp_dev /cmdline.txt; if test $filesize != 0; then fatload $isp_if $isp_dev $addr_dst_dtb /cmdline.txt; raspb init $fileaddr $filesize; fi;
+##bootargs
+sbootargs=setenv bootargs console=ttyS0,115200 earlyprintk root=/dev/mmcblk1p2 rw user_debug=255 rootwait $bootargs;
+## load kernel
+sload_kernel=fatload $isp_if $isp_dev $addr_dst_kernel /$KERNEL_IMG;
+## load dtb
+sload_dtb=fatload $isp_if $isp_dev $addr_dst_dtb /$DTB;
+## load nonos
+sload_nonos=fatload $isp_if $isp_dev $addr_dst_nonos /$NONOS_IMG;
+snonos_run=echo \"## Booting A926 from image at ${addr_dst_nonos}\"; sp_nonos_go ${addr_dst_nonos};
+sboot_nonos=setenv filesize 0; fatsize $isp_if $isp_dev /$NONOS_IMG; if itest.l ${filesize} != 0; then run sload_nonos;run snonos_run;fi;
+##boot cmd
+sboot=bootm ${addr_dst_kernel} - ${fdtcontroladdr};
+uenvcmd=run sboot_nonos; run sload_kernel; run sRpi_args; run sbootargs sboot;
+#
+## END
+#

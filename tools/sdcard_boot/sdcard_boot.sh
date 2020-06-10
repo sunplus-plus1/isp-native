@@ -1,27 +1,36 @@
-#/bin/bash
+#!/bin/bash
+
 TOP=../../..
 
-#Generate a virtual image containing FAT and EXT3 partitions,
-#ISPBOOOT.bin placed on the FAT partition,and uncompressed rootfs placed on the EXT2 partition
-#1.set the fat partition and copy ISPBOOOT.BIN to fat.img
-#2.copy resize2fs to disk/sbin/
-#3.set the ext3 partition 
-
+# Generate a disk image containing FAT and EXT3 partitions.
+# ISPBOOOT.BIN, u-boot.img, uImage, a926.img, and uEnv.txt
+# are placed on the FAT partition, and uncompressed rootfs
+# is placed on the EXT3 partition.
+# 1. Create boot (FAT) partition.
+# 2. Copy ISPBOOOT.BIN, u-boot.img, uImage, a926.img, and 
+#    uEnv.txt to it.
+# 3. Copy boot partition to output file 'ISP_SD_BOOOT.img'.
+# 4. Create root (ext3) partition.
+# 5. Copy 'rc.sdcardboot' to '/etc/init.d' of root partition.
+# 6. Resize root partition.
+# 7. Copy root partition to output file 'ISP_SD_BOOOT.img'.
+# 8. Create partition table.
 
 OUTPATH=$TOP/out/boot2linux_SDcard
 FAT_FILE_IN=$OUTPATH
 ROOT_DIR_IN=$TOP/linux/rootfs/initramfs/disk
+ROOT_IMG=$OUTPATH/../rootfs.img
 OUT_FILE=$OUTPATH/ISP_SD_BOOOT.img
 FAT_IMG_OUT=fat.img
-
-#modify the rc.sdcardroot(EXT3 partition's first sector)
+EXT_ENV=uEnv.txt
+NONOS_IMG=a926.img
 RC_SDCARDBOOTDIR=$ROOT_DIR_IN/etc/init.d
 RC_SDCARDBOOTFILE=rc.sdcardboot
-# part1 and part2 size unit:M
-FAT_IMG_SIZE_M=50
-ROOT_IMG_SIZE_M=1024
 
-# block size is 512byte for sfdisk set and FAT sector is 1024 default
+# Size of FAT partition size (unit: M)
+FAT_IMG_SIZE_M=100
+
+# Block size is 512 bytes for sfdisk and FAT sector is 1024 bytes
 BLOCK_SIZE=512
 FAT_SECTOR=1024
 
@@ -29,105 +38,111 @@ FAT_SECTOR=1024
 seek_offset=1024
 seek_bs=1024
 
-# check file 
-if [ -f $OUT_FILE ];then
+# Check file
+if [ -f $OUT_FILE ]; then
 	rm -rf $OUT_FILE
 fi
 
-if [ ! -d $FAT_FILE_IN ];then
+if [ ! -d $FAT_FILE_IN ]; then
 	echo "Error: $FAT_FILE_IN doesn't exist!"
 	exit 1
 fi
 
-if [ ! -d $ROOT_DIR_IN ];then
+if [ ! -d $ROOT_DIR_IN ]; then
 	echo "Error: $WORK_DIR doesn't exist!"
 	exit 1
 fi
 
-# Calculated params.
-mega="$(echo '2^20' | bc)"
+# cp uEnv to out/sdcardboot 
+cp $EXT_ENV $OUTPATH
 
-partition_size_1=$(($FAT_IMG_SIZE_M * $mega))
-partition_size_2=$(($ROOT_IMG_SIZE_M * $mega))
+# Calculate parameter.
+partition_size_1=$(($FAT_IMG_SIZE_M*1024*1024))
 
-#create fat img and copy ISPBOOOT to fat.img
+# Check size of FAT partition.
 rm -f "$FAT_IMG_OUT"
 
-sz=`du -sb $FAT_FILE_IN | cut -f1` 
-if [ $sz -gt $partition_size_1 ];then 
-	echo "$FAT_FILE_IN size(${sz}byte) is too larger. Please modify the FAT_IMG_SIZE_M size(${partition_size_1}byte).\n" ; 
-	exit 1; 
+sz=`du -sb $FAT_FILE_IN | cut -f1`
+if [ $sz -gt $partition_size_1 ]; then
+	echo "Size of '$FAT_FILE_IN' (${sz} bytes) is too larger."
+	echo "Please modify FAT_IMG_SIZE_M (${partition_size_1} bytes)."
+	exit 1;
 fi
 
-if [ -x "$(command -v mkfs.fat)" ]; then 
-  echo '######do mkfs.fat cmd ########' 
-  mkfs.fat -F 32 -C "$FAT_IMG_OUT" "$(($partition_size_1/$FAT_SECTOR))" 
-else 
-	if [ -x "$(command -v mkfs.vfat)" ]; then 
-	  echo '######do mkfs.vfat cmd ########' 
-	  mkfs.vfat -F 32 -C "$FAT_IMG_OUT" "$(($partition_size_1/$FAT_SECTOR))" 
-		if [ $? -ne 0 ];then
+if [ -x "$(command -v mkfs.fat)" ]; then
+	echo '###### do mkfs.fat cmd ########'
+	mkfs.fat -F 32 -C "$FAT_IMG_OUT" "$(($partition_size_1/$FAT_SECTOR))"
+	if [ $? -ne 0 ]; then
+		exit
+	fi
+else
+	if [ -x "$(command -v mkfs.vfat)" ]; then
+		echo '###### do mkfs.vfat cmd ########'
+		mkfs.vfat -F 32 -C "$FAT_IMG_OUT" "$(($partition_size_1/$FAT_SECTOR))"
+		if [ $? -ne 0 ]; then
 			exit
 		fi
-	else 
-	  echo "no mkfs.fat and mkfs.vfat cmd ,please install it" 
-	  exit 
+	else
+		echo "No mkfs.fat and mkfs.vfat cmd, please install it!"
+		exit
 	fi
 fi
 
-if [ -x "$(command -v mcopy)" ]; then 
-  echo '######do the mcopy cmd ########' 
-  mcopy -i "$FAT_IMG_OUT" -s "$FAT_FILE_IN/ISPBOOOT.BIN" "$FAT_FILE_IN/dtb" "$FAT_FILE_IN/uImage" "$FAT_FILE_IN/u-boot.img" ::
-  if [ $? -ne 0 ];then
-    exit
-  fi
-else 
-  echo "no mcopy cmd ,please install it" 
-  exit 
+if [ -x "$(command -v mcopy)" ]; then
+	echo '###### do the mcopy cmd ########'
+	mcopy -i "$FAT_IMG_OUT" -s "$FAT_FILE_IN/ISPBOOOT.BIN" "$OUTPATH/$EXT_ENV" "$FAT_FILE_IN/uImage" "$FAT_FILE_IN/u-boot.img" ::
+	if [ -f $FAT_FILE_IN/$NONOS_IMG ]; then
+		mcopy -i "$FAT_IMG_OUT" -s "$FAT_FILE_IN/$NONOS_IMG" ::
+	fi
+	if [ $? -ne 0 ]; then
+		exit
+	fi
+else
+	echo "No mcopy cmd, please install it!"
+	exit
 fi
 
-# offset fat.img
-
+# Offset boot partition (FAT)
 dd if="$FAT_IMG_OUT" of="$OUT_FILE" bs="$seek_bs" seek="$seek_offset"
 rm -f "$FAT_IMG_OUT"
-#create and offset ext2.img 
-#modify the ext partition's first sector in etc/init.d/rc.sdcardboot use to resize2fs root partition.
+
+# Create root partition (exte)
+# Copy 'rc.sdcardboot' to '/etc/init.d' of root partition.
 cp -rf "$RC_SDCARDBOOTFILE" $RC_SDCARDBOOTDIR
 
-sz=`du -sb $ROOT_DIR_IN | cut -f1` 
-if [ $sz -gt $partition_size_2 ];then 
-	echo "$ROOT_DIR_IN size(${sz}byte) is too larger. Please modify the ROOT_IMG_SIZE_M size(${partition_size_2}byte).\n" ; 
-	exit 1; 
-fi
-echo '######do mke2fs cmd ,mke2fs version need to bigger than 1.45.1########' 
+# Calculate size of root partition (assume 40% + 10MB overhead).
+sz=`du -sb $ROOT_DIR_IN | cut -f1`
+sz=$((sz*14/10))
+partition_size_2=$((sz/1024/1024+10))
+
+echo '###### do mke2fs cmd (mke2fs version need to bigger than 1.45.1) ########'
 chmod 777 $ROOT_DIR_IN/bin/busybox
-./mke2fs -j -d "$ROOT_DIR_IN" \
-  -r 1 \
-  -N 0 \
-  -m 5 \
-  -L '' \
-  -O ^64bit \
-  -b 4096 \
-  -E offset="$(($partition_size_1+$seek_bs*$seek_offset))" \
-  "$OUT_FILE" "${ROOT_IMG_SIZE_M}M" \
-;
-if [ $? -ne 0 ];then
+rm -f "$ROOT_IMG"
+./mke2fs -j -d "$ROOT_DIR_IN" -r 1 -N 0 -L '' -O ^64bit -b 4096 "$ROOT_IMG" "$((partition_size_2))M"
+if [ $? -ne 0 ]; then
  	exit
 fi
-# create the partition info
-echo '######do sfdisk cmd ,sfdisk version need to bigger than 2.27.1########' 
-if [ -x "$(command -v sfdisk)" ]; then 
-  sfdisk -v
-  printf "
-  type=b, size=$(($partition_size_1/$BLOCK_SIZE))
-  type=83, size=$(($partition_size_2/$BLOCK_SIZE))
-  " | sfdisk "$OUT_FILE"
-else 
-  echo "no sfdisk cmd ,please install it" 
-  exit 
+
+# Resize to minimum + 10%
+resize2fs -M "$ROOT_IMG"
+partition_size_2=`du -sb $ROOT_IMG | cut -f1`
+partition_size_2=$((partition_size_2*11/10))
+partition_size_2=$(((partition_size_2+1048575)/1024/1024))
+echo "rootfs created size = $partition_size_2 MB"
+resize2fs $ROOT_IMG $(($partition_size_2))M
+
+# Offset root partition (ext3)
+dd if="$ROOT_IMG" of="$OUT_FILE" bs="$seek_bs" seek="$(($seek_offset+$partition_size_1/$seek_bs))"
+
+# Create the partition info
+partition_size_2=$((partition_size_2*1024*1024))
+echo '###### do sfdisk cmd (sfdisk version need to bigger than 2.27.1) ########'
+if [ -x "$(command -v sfdisk)" ]; then
+	sfdisk -v
+	printf "type=b, size=$(($partition_size_1/$BLOCK_SIZE))
+	        type=83, size=$(($partition_size_2/$BLOCK_SIZE))" |
+	sfdisk "$OUT_FILE"
+else
+	echo "no sfdisk cmd, please install it"
+	exit
 fi
-
-#rm -rf $FAT_FILE_IN
-#to avoid switch to emmc and init from rc.sdcard
-#rm -rf $RC_SDCARDBOOTDIR/$RC_SDCARDBOOTFILE
-
